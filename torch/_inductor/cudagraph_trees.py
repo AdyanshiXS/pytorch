@@ -52,6 +52,7 @@ from collections import defaultdict
 from contextlib import AbstractContextManager
 from enum import auto, Enum
 from typing import Any, cast, TYPE_CHECKING, TypeVar
+from typing_extensions import ParamSpec
 
 import torch.fx
 from torch import Tensor
@@ -461,9 +462,13 @@ def cudagraphify_impl(
     return deferred_cudagraphify
 
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
 def protect_pool_inputs_for_partitioned_call(
-    callable: Callable[..., Any], device_index: int
-) -> Callable[..., Any]:
+    callable: Callable[_P, _R], device_index: int
+) -> Callable[_P, _R]:
     """Wrap a partitioned callable to clone top-level pool-referencing inputs.
 
     When a compiled function is split into multiple CUDA-graph partitions,
@@ -478,7 +483,8 @@ def protect_pool_inputs_for_partitioned_call(
     invalidate another partition's pending inputs.
     """
 
-    def protected(inputs: list[InputType]) -> OutputType:
+    def protected(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        inputs = args[0]
         container = get_container(device_index)
         manager = container.tree_manager
         if (
@@ -487,10 +493,10 @@ def protect_pool_inputs_for_partitioned_call(
             and (manager.in_recording or manager.in_warmup)
             and manager.can_start_new_generation()
         ):
-            manager._protect_inputs_from_dealloc(inputs)
-        return callable(inputs)
+            manager._protect_inputs_from_dealloc(inputs)  # type: ignore[arg-type]
+        return callable(*args, **kwargs)
 
-    return protected
+    return protected  # type: ignore[return-value]
 
 
 @contextlib.contextmanager
@@ -2246,9 +2252,7 @@ class CUDAGraphTreeManager:
     ) -> bool:
         return False
 
-    def _protect_inputs_from_dealloc(
-        self, new_inputs: list[InputType]
-    ) -> None:
+    def _protect_inputs_from_dealloc(self, new_inputs: list[InputType]) -> None:
         """Clone input tensors whose storage lives in the CUDA graph pool.
 
         When outputs from a previous run are fed back as inputs (e.g. the
@@ -2271,12 +2275,14 @@ class CUDAGraphTreeManager:
         if not pool_ptrs:
             return
 
-        def _maybe_clone(x: Any) -> Any:
+        _T = TypeVar("_T")
+
+        def _maybe_clone(x: _T) -> _T:
             if (
                 isinstance(x, torch.Tensor)
                 and x.untyped_storage().data_ptr() in pool_ptrs
             ):
-                return x.clone()
+                return x.clone()  # type: ignore[return-value]
             return x
 
         for i, inp in enumerate(new_inputs):
