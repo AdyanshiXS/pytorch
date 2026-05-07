@@ -55,10 +55,10 @@ jobs:
         docker-image: ["pytorch/manylinux2_28-builder:cpu"]
         include:
           - device: "rocm-n"
-            rocm_version: "7.1"
+            rocm_version: "7.2"
             runs_on: "${{ needs.get-label-type.outputs.label-type }}linux.4xlarge"
           - device: "rocm-n-1"
-            rocm_version: "7.0"
+            rocm_version: "7.1"
             runs_on: "${{ needs.get-label-type.outputs.label-type }}linux.4xlarge"
           - device: "cuda"
             rocm_version: ""
