@@ -1412,6 +1412,13 @@ class UserDefinedClassVariable(UserDefinedVariable):
             and self.value is other.value
         )
 
+    def reconstruct_pycode(self, codegen) -> str:
+        if self.source:
+            return self.source.reconstruct_pycode(codegen)
+        raise NotImplementedError(
+            "Python codegen not implemented yet for sourceless UserDefinedClassVariable."
+        )
+
     def get_real_python_backed_value(self) -> object:
         return self.value
 
@@ -1561,6 +1568,13 @@ class UserDefinedObjectVariable(UserDefinedVariable):
         if self._base_vt is not None:
             return side_effects.is_modified(self._base_vt)
         return False
+
+    def reconstruct_pycode(self, codegen):
+        if self.source:
+            return self.source.reconstruct_pycode(codegen)
+        raise NotImplementedError(
+            "Python codegen not implemented yet for sourceless UserDefinedObjectVariable"
+        )
 
     def python_type(self) -> type:
         return self.value_type  # type: ignore[return-value]
