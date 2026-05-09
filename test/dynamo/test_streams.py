@@ -2270,6 +2270,133 @@ class <lambda>(torch.nn.Module):
         self.assertEqual(actual_default, default_s.cuda_stream)
 
 
+class _EventHoldingTensor(torch.Tensor):
+    """Trivial wrapper subclass used by
+    :class:`TestStreamsEventTracingUnderProxyMode`.  Holds a CUDA Event
+    as an attribute and records / waits on it from
+    ``__torch_function__``.  The subclass has both ``__torch_function__``
+    and ``__torch_dispatch__`` so it qualifies as a traceable wrapper
+    subclass; dynamo therefore does not symbolically inline its
+    ``__torch_function__`` body, which is the regime this test is
+    written to cover."""
+
+    @staticmethod
+    def __new__(cls, t, evt):  # noqa: D401
+        return torch.Tensor._make_wrapper_subclass(
+            cls,
+            t.shape,
+            dtype=t.dtype,
+            device=t.device,
+            layout=t.layout,
+            requires_grad=t.requires_grad,
+        )
+
+    def __init__(self, t, evt):
+        self._t = t
+        self._evt = evt
+
+    def __tensor_flatten__(self):
+        return ["_t"], ()
+
+    @staticmethod
+    def __tensor_unflatten__(inner, meta, outer_size, outer_stride):
+        return _EventHoldingTensor(inner["_t"], torch.cuda.Event())
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+        if func is torch.relu:
+            (x,) = args
+            cur = torch.cuda.current_stream()
+            x._evt.record(cur)
+            cur.wait_event(x._evt)
+            with torch._C.DisableTorchFunctionSubclass():
+                return torch.relu(x._t)
+        with torch._C.DisableTorchFunctionSubclass():
+            return func(*args, **kwargs)
+
+    @classmethod
+    def __torch_dispatch__(cls, op, types, args=(), kwargs=None):
+        kwargs = kwargs or {}
+
+        def _reify(t):
+            return t._t if isinstance(t, _EventHoldingTensor) else t
+
+        return op(
+            *[_reify(a) for a in args],
+            **{k: _reify(v) for k, v in kwargs.items()},
+        )
+
+
+class TestStreamsEventTracingUnderProxyMode(unittest.TestCase):
+    """``Event.record(stream)`` and ``Stream.wait_event(event)`` Python
+    calls must produce ``torch.ops.streams.{record,wait}_event`` FX
+    nodes when invoked while an fx proxy tracer is active, even if the
+    Python call originates from a context dynamo cannot symbolically
+    inline (for example a tensor subclass's ``__torch_function__``).
+
+    Uses plain :class:`unittest.TestCase` instead of
+    :class:`torch._dynamo.test_case.TestCase` so the test does not
+    inherit the latter's logging / dispatch-mode setup, which
+    incidentally hides the bug under repro.
+    """
+
+    @requires_cuda
+    def test_record_wait_inside_subclass_torch_function(self) -> None:
+        sub = _EventHoldingTensor(
+            torch.randn(8, device="cuda"), torch.cuda.Event()
+        )
+
+        captured: list[torch.fx.GraphModule] = []
+
+        def _fw_compiler(gm_aot, _example_inputs):
+            captured.append(gm_aot)
+            return gm_aot
+
+        def _capturing_backend(gm, example_inputs):
+            from torch._functorch.aot_autograd import aot_module_simplified
+
+            return aot_module_simplified(
+                gm, example_inputs, fw_compiler=_fw_compiler
+            )
+
+        def _fn(x):
+            return torch.relu(x)
+
+        torch._dynamo.reset()
+        compiled = torch.compile(
+            _fn, backend=_capturing_backend, fullgraph=False
+        )
+        with torch.inference_mode():
+            compiled(sub)
+            torch.cuda.synchronize()
+
+        self.assertEqual(len(captured), 1, "expected exactly one AOT graph")
+        gm = captured[0]
+        record_op = torch.ops.streams.record_event.default
+        wait_op = torch.ops.streams.wait_event.default
+        record_nodes = [
+            n
+            for n in gm.graph.nodes
+            if n.op == "call_function" and n.target is record_op
+        ]
+        wait_nodes = [
+            n
+            for n in gm.graph.nodes
+            if n.op == "call_function" and n.target is wait_op
+        ]
+        self.assertEqual(
+            len(record_nodes),
+            1,
+            f"expected 1 streams.record_event node in:\n{gm.graph}",
+        )
+        self.assertEqual(
+            len(wait_nodes),
+            1,
+            f"expected 1 streams.wait_event node in:\n{gm.graph}",
+        )
+
+
 if __name__ == "__main__":
     from torch._dynamo.test_case import run_tests
 

@@ -60,6 +60,10 @@ class Stream(torch._C._CudaStreamBase):
         .. _CUDA Stream documentation:
            https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__STREAM.html
         """
+        # ``event.wait(self)`` is responsible for mirroring the side
+        # effect as a streams.wait_event FX node when an fx proxy tracer
+        # is active; do not emit one here too or the captured graph will
+        # have a duplicate node.
         event.wait(self)
 
     def wait_stream(self, stream: Stream | torch.Stream) -> None:
@@ -205,6 +209,15 @@ class Event(torch._C._CudaEventBase):
         """
         if stream is None:
             stream = torch.cuda.current_stream()
+        # If we are inside an fx proxy tracer (e.g. compiled forward),
+        # mirror the call as a streams.record_event FX node so the
+        # cross-stream sync is preserved in the captured graph.  See
+        # ``torch._dynamo.variables.streams.maybe_emit_streams_op_proxy``.
+        from torch._dynamo.variables.streams import maybe_emit_streams_op_proxy
+
+        maybe_emit_streams_op_proxy(
+            torch.ops.streams.record_event.default, self, stream
+        )
         # pyrefly: ignore [bad-argument-type]
         super().record(stream)
 
@@ -219,6 +232,15 @@ class Event(torch._C._CudaEventBase):
         """
         if stream is None:
             stream = torch.cuda.current_stream()
+        # If we are inside an fx proxy tracer (e.g. compiled forward),
+        # mirror the call as a streams.wait_event FX node so the
+        # cross-stream sync is preserved in the captured graph.  See
+        # ``torch._dynamo.variables.streams.maybe_emit_streams_op_proxy``.
+        from torch._dynamo.variables.streams import maybe_emit_streams_op_proxy
+
+        maybe_emit_streams_op_proxy(
+            torch.ops.streams.wait_event.default, self, stream
+        )
         # pyrefly: ignore [bad-argument-type]
         super().wait(stream)
 
