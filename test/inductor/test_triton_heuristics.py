@@ -50,6 +50,7 @@ from torch._inductor.runtime.triton_heuristics import (
     CachingAutotuner,
     CachingAutotunerPlugin,
     DEFER,
+    filter_configs_for_device_heuristics,
     template,
     triton_config,
 )
@@ -94,6 +95,153 @@ class TestTritonHeuristics(TestCase):
             if key not in cfg.kwargs:
                 continue
             self.assertTrue(cfg.kwargs[key] <= TRITON_MAX_BLOCK[label])
+
+    def test_filter_configs_for_device_heuristics_pointwise_1d(self):
+        triton_meta = {
+            "device": DeviceProperties(
+                type="cuda", index=0, multi_processor_count=80, cc=80
+            )
+        }
+        size_hints = {"x": 2**28}
+        inductor_meta = {
+            "filter_configs_by_device": True,
+            "grid_type": "Grid1D",
+        }
+        configs = [
+            triton.Config({"XBLOCK": 1}, num_warps=1, num_stages=1),
+            triton.Config({"XBLOCK": 256}, num_warps=4, num_stages=1),
+        ]
+
+        filtered = filter_configs_for_device_heuristics(
+            size_hints=size_hints,
+            inductor_meta=inductor_meta,
+            triton_meta=triton_meta,
+            configs=configs,
+        )
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].kwargs["XBLOCK"], 256)
+
+    def test_filter_configs_for_device_heuristics_pointwise_2d(self):
+        triton_meta = {
+            "device": DeviceProperties(
+                type="cuda", index=0, multi_processor_count=80, cc=80
+            )
+        }
+        size_hints = {"x": 2**14, "y": 2**14}
+        inductor_meta = {
+            "filter_configs_by_device": True,
+            "grid_type": "Grid2D",
+        }
+        configs = [
+            triton.Config({"XBLOCK": 1, "YBLOCK": 1}, num_warps=1, num_stages=1),
+            triton.Config({"XBLOCK": 256, "YBLOCK": 256}, num_warps=4, num_stages=1),
+        ]
+
+        filtered = filter_configs_for_device_heuristics(
+            size_hints=size_hints,
+            inductor_meta=inductor_meta,
+            triton_meta=triton_meta,
+            configs=configs,
+        )
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].kwargs["XBLOCK"], 256)
+        self.assertEqual(filtered[0].kwargs["YBLOCK"], 256)
+
+    def test_filter_configs_for_device_heuristics_reduction_1d(self):
+        triton_meta = {
+            "device": DeviceProperties(
+                type="cuda", index=0, multi_processor_count=80, cc=80
+            )
+        }
+        size_hints = {"x": 2**26, "r0_": 1024}
+        inductor_meta = {
+            "filter_configs_by_device": True,
+            "grid_type": "Grid1D",
+        }
+        configs = [
+            triton.Config({"XBLOCK": 1, "R0_BLOCK": 4}, num_warps=1, num_stages=1),
+            triton.Config({"XBLOCK": 64, "R0_BLOCK": 64}, num_warps=4, num_stages=1),
+        ]
+
+        filtered = filter_configs_for_device_heuristics(
+            size_hints=size_hints,
+            inductor_meta=inductor_meta,
+            triton_meta=triton_meta,
+            configs=configs,
+        )
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].kwargs["XBLOCK"], 64)
+
+    def test_filter_configs_for_device_heuristics_mix_order_reduction(self):
+        triton_meta = {
+            "device": DeviceProperties(
+                type="cuda", index=0, multi_processor_count=80, cc=80
+            )
+        }
+        size_hints = {"x": 2**26, "r0_": 1024}
+        inductor_meta = {
+            "filter_configs_by_device": True,
+            "grid_type": "MixOrderReductionGrid",
+        }
+        configs = [
+            # Must be kept when using MixOrderReductionGrid: low grid_ctas and high CTA work.
+            triton.Config(
+                {"XBLOCK": 1, "R0_BLOCK": 4, "RSPLIT_SIZE": 2**20},
+                num_warps=1,
+                num_stages=1,
+            ),
+            # Obvious bad config under mix-order semantics.
+            triton.Config(
+                {"XBLOCK": 1, "R0_BLOCK": 4, "RSPLIT_SIZE": 1},
+                num_warps=1,
+                num_stages=1,
+            ),
+            # Good due to high CTA work even with RSPLIT_SIZE=1.
+            triton.Config(
+                {"XBLOCK": 64, "R0_BLOCK": 64, "RSPLIT_SIZE": 1},
+                num_warps=4,
+                num_stages=1,
+            ),
+        ]
+
+        filtered = filter_configs_for_device_heuristics(
+            size_hints=size_hints,
+            inductor_meta=inductor_meta,
+            triton_meta=triton_meta,
+            configs=configs,
+        )
+
+        self.assertEqual(len(filtered), 2)
+        self.assertEqual(
+            sorted((c.kwargs["XBLOCK"], c.kwargs["RSPLIT_SIZE"]) for c in filtered),
+            [(1, 2**20), (64, 1)],
+        )
+
+    def test_filter_configs_for_device_heuristics_keeps_smallest_grid(self):
+        triton_meta = {
+            "device": DeviceProperties(
+                type="cuda", index=0, multi_processor_count=1, cc=80
+            )
+        }
+        size_hints = {"x": 2**22}
+        inductor_meta = {
+            "filter_configs_by_device": True,
+            "grid_type": "Grid1D",
+        }
+        configs = [
+            triton.Config({"XBLOCK": 1}, num_warps=1, num_stages=1),
+            triton.Config({"XBLOCK": 32}, num_warps=1, num_stages=1),
+        ]
+
+        filtered = filter_configs_for_device_heuristics(
+            size_hints=size_hints,
+            inductor_meta=inductor_meta,
+            triton_meta=triton_meta,
+            configs=configs,
+        )
+
+        self.assertEqual(len(filtered), 1)
+        self.assertEqual(filtered[0].kwargs["XBLOCK"], 32)
 
     def _test_artificial_zgrid(self):
         def forward(primals_1, primals_2, primals_5):

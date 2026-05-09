@@ -1868,6 +1868,13 @@ class triton:
     # this should only be disabled for debugging/testing
     autotune_pointwise = True
 
+    # Filter out obviously poor pointwise/reduction autotune configs based on
+    # launch geometry vs device SM count. This is independent of deterministic
+    # mode and intended to reduce futile benchmarking.
+    filter_configs_by_device = (
+        os.environ.get("TORCHINDUCTOR_TRITON_FILTER_CONFIGS_BY_DEVICE", "0") == "1"
+    )
+
     # max autotune gemm with cublasLt
     autotune_cublasLt = True
 
