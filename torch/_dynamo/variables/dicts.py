@@ -47,6 +47,7 @@ from ..utils import (
     dict_values,
     istype,
     raise_args_mismatch,
+    tracked_repr,
 )
 from .base import (
     AttributeMutationExisting,
@@ -177,9 +178,11 @@ class ConstDictVariable(VariableTracker):
         }
 
     def repr_impl(self, tx: "InstructionTranslator") -> VariableTracker:
-        if self.is_python_constant():
-            return VariableTracker.build(tx, repr(self.as_python_constant()))
-        return VariableTracker.build(tx, self.debug_repr())
+        items = [
+            f"{tracked_repr(tx, key.vt)}: {tracked_repr(tx, value)}"
+            for key, value in self.items.items()
+        ]
+        return VariableTracker.build(tx, "{" + ", ".join(items) + "}")
 
     def keys_as_python_constant(self) -> dict[Any, VariableTracker]:
         self.install_dict_keys_match_guard()
@@ -988,13 +991,17 @@ class DictViewVariable(VariableTracker):
         return ConstantVariable.create(False)
 
     def repr_impl(self, tx: "InstructionTranslator") -> VariableTracker:
-        if self.dv_dict.is_python_constant():
-            d = self.dv_dict.as_python_constant()
-            if self.kv is None:
-                raise AssertionError("kv must not be None for repr_impl")
-            view = getattr(d, self.kv)()
-            return VariableTracker.build(tx, repr(view))
-        return VariableTracker.build(tx, self.debug_repr())
+        if self.kv == "keys":
+            items = ", ".join(tracked_repr(tx, key.vt) for key in self.view_items)
+            return VariableTracker.build(tx, f"dict_keys([{items}])")
+        if self.kv == "values":
+            items = ", ".join(tracked_repr(tx, value) for value in self.view_items)
+            return VariableTracker.build(tx, f"dict_values([{items}])")
+        items = ", ".join(
+            f"({tracked_repr(tx, key.vt)}, {tracked_repr(tx, value)})"
+            for key, value in self.view_items
+        )
+        return VariableTracker.build(tx, f"dict_items([{items}])")
 
     def sq_length(self, tx: "InstructionTranslator") -> VariableTracker:
         """Sequence length for dict view objects."""
