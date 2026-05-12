@@ -45,6 +45,7 @@ from torch.fx.experimental.proxy_tensor import make_fx
 from torch.fx.experimental.symbolic_shapes import (
     DimDynamic,
     free_symbols,
+    free_unbacked_symbols,
     ShapeEnv,
     ShapeEnvSettings,
     StatelessSymbolicContext,
@@ -890,6 +891,29 @@ class FakeTensorTest(TestCase):
         self.assertIs(t2.fake_mode, mode2)
         self.assertIs(t2.size(0).node.shape_env, t1.size(0).node.shape_env)
         self.assertEqual(str(t2.size(0)), str(t1.size(0)))
+
+    def test_linear_rank3_unbacked_batch_dim(self):
+        shape_env = ShapeEnv()
+        fake_mode = FakeTensorMode(allow_non_fake_inputs=True, shape_env=shape_env)
+        x = fake_mode.from_tensor(
+            torch.randn(4, 16, 256),
+            symbolic_context=StatelessSymbolicContext(
+                dynamic_sizes=[
+                    DimDynamic.UNBACKED,
+                    DimDynamic.STATIC,
+                    DimDynamic.STATIC,
+                ],
+                constraint_sizes=[None, None, None],
+            ),
+        )
+        weight = fake_mode.from_tensor(torch.randn(3072, 256), static_shapes=True)
+
+        self.assertTrue(free_unbacked_symbols(x.shape[0]))
+        with fake_mode:
+            out = torch.nn.functional.linear(x, weight)
+
+        self.assertEqual(out.shape[1:], (16, 3072))
+        self.assertTrue(free_unbacked_symbols(out.shape[0]))
 
     # TODO: Support NJT.  There's also some funny business with dynamic shapes
     # which would need to be dealt with as well
