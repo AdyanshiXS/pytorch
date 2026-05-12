@@ -393,6 +393,11 @@ class BaseUserFunctionVariable(VariableTracker):
         super().__init__(**kwargs)
         self.dict_vt: DunderDictVariable | None = dict_vt
 
+    def richcompare_impl(self, tx, other, op):
+        from .object_protocol import object_richcompare
+
+        return object_richcompare(self, tx, other, op)
+
     def get_source(self) -> Source | None:
         return self.source
 
@@ -2204,6 +2209,11 @@ class SkipFunctionVariable(VariableTracker):
         self.value = value
         self.reason = reason
 
+    def richcompare_impl(self, tx, other, op):
+        from .object_protocol import object_richcompare
+
+        return object_richcompare(self, tx, other, op)
+
     def as_python_constant(self) -> Any:
         return self.value
 
@@ -2878,6 +2888,11 @@ class FunctoolsPartialVariable(VariableTracker):
         self.keywords = keywords
         # Store cache_hash from the original partial for SAC context_fn caching
         self.original_cache_hash = original_cache_hash
+
+    def richcompare_impl(self, tx, other, op):
+        from .object_protocol import object_richcompare
+
+        return object_richcompare(self, tx, other, op)
 
     def python_type(self) -> type:
         return functools.partial
@@ -4353,6 +4368,13 @@ class GetSetDescriptorVariable(VariableTracker):
 
     def as_python_constant(self) -> types.GetSetDescriptorType:
         return self.descriptor
+
+    def richcompare_impl(
+        self, tx: "InstructionTranslator", other: "VariableTracker", op: str
+    ) -> "VariableTracker":
+        from .object_protocol import python_constant_richcompare_impl
+
+        return python_constant_richcompare_impl(self, tx, other, op)
 
     def tp_descr_get_impl(
         self,
