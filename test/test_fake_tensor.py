@@ -27,6 +27,7 @@ import torch.utils._pytree as pytree
 from torch import distributed as dist
 from torch._C._functorch import _add_batch_dim, get_unwrapped, is_batchedtensor
 from torch._dispatch.python import enable_python_dispatcher
+from torch._dynamo.source import LocalSource
 from torch._dynamo.testing import make_test_cls_with_patches, rand_strided
 from torch._guards import tracing, TracingContext
 from torch._higher_order_ops.scan import scan
@@ -52,6 +53,7 @@ from torch.fx.experimental.symbolic_shapes import (
     statically_known_true,
 )
 from torch.fx.passes.fake_tensor_prop import FakeTensorProp
+from torch.nn.attention import sdpa_kernel, SDPBackend
 from torch.testing import FileCheck
 from torch.testing._internal.common_cuda import PLATFORM_SUPPORTS_FLASH_ATTENTION
 from torch.testing._internal.common_device_type import (
@@ -96,6 +98,26 @@ def expectedFailurePropagateRealTensors(fn):
 
 
 class FakeTensorTest(TestCase):
+    def fake_with_unbacked_batch(self, *tensors):
+        shape_env = ShapeEnv()
+        fake_mode = FakeTensorMode(allow_non_fake_inputs=True, shape_env=shape_env)
+        fakes = []
+        with fake_mode, shape_env.ignore_fresh_unbacked_symbols():
+            for i, tensor in enumerate(tensors):
+                fakes.append(
+                    fake_mode.from_tensor(
+                        tensor,
+                        source=LocalSource(f"arg{i}", is_input=True),
+                        symbolic_context=StatelessSymbolicContext(
+                            dynamic_sizes=[
+                                DimDynamic.UNBACKED,
+                                *[DimDynamic.STATIC] * (tensor.dim() - 1),
+                            ],
+                        ),
+                    )
+                )
+        return fake_mode, fakes
+
     def checkType(self, t, device_str, size):
         self.assertTrue(isinstance(t, FakeTensor))
         self.assertEqual(t.device.type, device_str)
@@ -913,6 +935,42 @@ class FakeTensorTest(TestCase):
             out = torch.nn.functional.linear(x, weight)
 
         self.assertEqual(out.shape[1:], (16, 3072))
+        self.assertTrue(free_unbacked_symbols(out.shape[0]))
+
+    def test_matmul_rank4_unbacked_batch_dim(self):
+        fake_mode, (q, k) = self.fake_with_unbacked_batch(
+            torch.randn(4, 2, 8, 16),
+            torch.randn(4, 2, 8, 16),
+        )
+
+        def f(q, k):
+            return torch.matmul(q, k.transpose(-2, -1))
+
+        with fake_mode:
+            gm = make_fx(f)(q, k)
+            out = gm(q, k)
+
+        self.assertEqual(out.shape[1:], (2, 8, 8))
+        self.assertTrue(free_unbacked_symbols(out.shape[0]))
+
+    def test_sdpa_math_unbacked_batch_dim(self):
+        fake_mode, (q, k, v) = self.fake_with_unbacked_batch(
+            torch.randn(4, 2, 8, 16),
+            torch.randn(4, 2, 8, 16),
+            torch.randn(4, 2, 8, 16),
+        )
+
+        def f(q, k, v):
+            with sdpa_kernel([SDPBackend.MATH], set_priority=True):
+                return torch.nn.functional.scaled_dot_product_attention(
+                    q, k, v, is_causal=True
+                )
+
+        with fake_mode:
+            gm = make_fx(f)(q, k, v)
+            out = gm(q, k, v)
+
+        self.assertEqual(out.shape[1:], (2, 8, 16))
         self.assertTrue(free_unbacked_symbols(out.shape[0]))
 
     # TODO: Support NJT.  There's also some funny business with dynamic shapes
