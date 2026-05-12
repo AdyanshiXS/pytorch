@@ -2971,7 +2971,7 @@ class DictBuiltinVariable(BaseBuiltinVariable):
 
     _fn = dict
 
-    def __init__(self, value: type = dict, **kwargs: Any) -> None:
+    def __init__(self, value: type[dict[Any, Any]] = _fn, **kwargs: Any) -> None:
         if value is not dict:
             raise AssertionError(f"DictBuiltinVariable value must be dict, got {value}")
         super().__init__(**kwargs)
@@ -3160,7 +3160,7 @@ class IterBuiltinVariable(BaseBuiltinVariable):
 
     _fn = iter
 
-    def __init__(self, value: Any = iter, **kwargs: Any) -> None:
+    def __init__(self, value: Callable[..., Any] = _fn, **kwargs: Any) -> None:
         if value is not iter:
             raise AssertionError(f"IterBuiltinVariable value must be iter, got {value}")
         super().__init__(**kwargs)
@@ -3196,7 +3196,7 @@ class GetAttrBuiltinVariable(BaseBuiltinVariable):
 
     _fn = getattr
 
-    def __init__(self, value: Any = getattr, **kwargs: Any) -> None:
+    def __init__(self, value: Callable[..., Any] = _fn, **kwargs: Any) -> None:
         if value is not getattr:
             raise AssertionError(
                 f"GetAttrBuiltinVariable value must be getattr, got {value}"
@@ -3413,7 +3413,7 @@ class HasAttrBuiltinVariable(BaseBuiltinVariable):
 
     _fn = hasattr
 
-    def __init__(self, value: Any = hasattr, **kwargs: Any) -> None:
+    def __init__(self, value: Callable[..., Any] = _fn, **kwargs: Any) -> None:
         if value is not hasattr:
             raise AssertionError(
                 f"HasAttrBuiltinVariable value must be hasattr, got {value}"
@@ -3597,7 +3597,7 @@ class SetAttrBuiltinVariable(BaseBuiltinVariable):
 
     _fn = setattr
 
-    def __init__(self, value: Any = setattr, **kwargs: Any) -> None:
+    def __init__(self, value: Callable[..., Any] = _fn, **kwargs: Any) -> None:
         if value is not setattr:
             raise AssertionError(
                 f"SetAttrBuiltinVariable value must be setattr, got {value}"
@@ -3804,7 +3804,7 @@ class StrBuiltinVariable(BaseBuiltinVariable):
 
     _fn = str
 
-    def __init__(self, value: type = _fn, **kwargs: Any) -> None:
+    def __init__(self, value: type[str] = _fn, **kwargs: Any) -> None:
         if value is not self._fn:
             raise AssertionError(f"StrBuiltinVariable value must be str, got {value}")
         super().__init__(**kwargs)
@@ -3932,7 +3932,7 @@ class TypeBuiltinVariable(BaseBuiltinVariable):
 
     _fn = type
 
-    def __init__(self, value: type = _fn, **kwargs: Any) -> None:
+    def __init__(self, value: type[Any] = _fn, **kwargs: Any) -> None:
         if value is not type:
             raise AssertionError(f"TypeBuiltinVariable value must be type, got {value}")
         super().__init__(**kwargs)
@@ -4019,7 +4019,7 @@ class ListBuiltinVariable(BaseBuiltinVariable):
 
     _fn = list
 
-    def __init__(self, value: type = list, **kwargs: Any) -> None:
+    def __init__(self, value: type[list[Any]] = _fn, **kwargs: Any) -> None:
         if value is not list:
             raise AssertionError(f"ListBuiltinVariable value must be list, got {value}")
         super().__init__(**kwargs)
